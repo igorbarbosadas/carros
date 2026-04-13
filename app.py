@@ -1,46 +1,47 @@
 import streamlit as st
-from google.cloud import vision
-import io
-import re
-import json
+import base64
 
-# Carrega as credenciais dos Secrets do Streamlit
-if "gcp_service_account" in st.secrets:
-    info = json.loads(st.secrets["gcp_service_account"])
-    client = vision.ImageAnnotatorClient.from_service_account_info(info)
-else:
-    st.error("Configure as credenciais do Google Cloud nos Secrets.")
+def display_pdf(file):
+    # Lê o PDF e codifica para exibição na tela
+    base64_pdf = base64.b64encode(file).decode('utf-8')
+    pdf_display = f'<embed src="data:application/pdf;base64,{base64_pdf}" width="100%" height="600" type="application/pdf">'
+    st.markdown(pdf_display, unsafe_allow_ 開き true)
 
-def extrair_com_google(pdf_bytes):
-    # O Google Vision prefere imagens, mas para PDFs ele processa via GCS ou blocos
-    # Para simplicidade e arquivos > 1MB, enviamos o conteúdo
-    image = vision.Image(content=pdf_bytes)
-    response = client.text_detection(image=image)
-    texts = response.text_annotations
-    
-    if texts:
-        return texts[0].description
-    return ""
+st.set_page_config(page_title="Renomeador Della Volpe", layout="wide")
+st.title("🚛 Renomeador de Carregamentos (Modo Assistido)")
 
-st.title("🚛 Renomeador Profissional (Google Vision)")
+st.info("Como o arquivo é um scan, visualize o PDF abaixo e digite a Placa e o Dia/Mês.")
 
-arquivo = st.file_uploader("Suba o scan (PDF/Imagem)", type=["pdf", "jpg", "png"])
+arquivo = st.file_uploader("Suba o arquivo PDF aqui", type=["pdf"])
 
 if arquivo:
-    with st.spinner('O Google está lendo o arquivo...'):
-        conteudo = arquivo.read()
-        texto_extraido = extrair_com_google(conteudo)
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.subheader("Visualização do Documento")
+        pdf_bytes = arquivo.read()
+        display_pdf(pdf_bytes)
         
-        # Limpeza e busca da Placa (Baseado no seu documento FDZ0H80)
-        texto_limpo = texto_extraido.replace(" ", "").upper()
-        placa_match = re.search(r'[A-Z]{3}[0-9][A-Z0-9][0-9]{2}', texto_limpo)
-        placa = placa_match.group(0) if placa_match else "PLACA_NAO_ENCONTRADA"
+    with col2:
+        st.subheader("Dados para Renomear")
+        # Campos de texto para preenchimento rápido
+        # Você olha para o PDF ao lado e digita
+        placa = st.text_input("Placa do Veículo (ex: FDZ0H80)", "").upper().strip()
+        data_input = st.text_input("Dia e Mês (ex: 04.04)", "").strip()
         
-        # Busca Data no formato DD/MM/AAAA
-        data_match = re.search(r'(\d{2})/(\d{2})/\d{4}', texto_extraido)
-        data_curta = f"{data_match.group(1)}.{data_match.group(2)}" if data_match else "DATA_ERRO"
-        
-        nome_final = f"{placa} - {data_curta}.pdf"
-        
-        st.success(f"Pronto! Nome sugerido: {nome_final}")
-        st.download_button("Baixar Arquivo Renomeado", conteudo, file_name=nome_final)
+        if placa and data_input:
+            nome_final = f"{placa} - {data_input}.pdf"
+            st.success(f"Arquivo pronto: **{nome_final}**")
+            
+            # Botão de download com o nome correto
+            st.download_button(
+                label="📥 Baixar PDF Renomeado",
+                data=pdf_bytes,
+                file_name=nome_final,
+                mime="application/pdf"
+            )
+        else:
+            st.warning("Preencha a Placa e a Data para habilitar o download.")
+
+st.divider()
+st.caption("Dica: A placa costuma estar na página 1 e a data de impressão no rodapé da página 4.")
