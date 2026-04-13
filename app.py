@@ -1,44 +1,60 @@
 import streamlit as st
-import base64
+import easyocr
+import numpy as np
+from pdf2image import convert_from_bytes
+import re
 
-def display_pdf(file_bytes):
-    # Codifica o PDF para ser exibido no navegador
-    base64_pdf = base64.b64encode(file_bytes).decode('utf-8')
-    pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="600" type="application/pdf"></iframe>'
-    st.markdown(pdf_display, unsafe_allow_html=True)
+# Carrega o leitor de OCR (Português e Inglês)
+# O allowlist ajuda a IA a focar em letras e números, sendo mais rápido
+@st.cache_resource
+def load_reader():
+    return easyocr.Reader(['pt', 'en'], gpu=False)
 
-st.set_page_config(page_title="Renomeador Della Volpe", layout="wide")
-st.title("🚛 Renomeador de Carregamentos")
+def processar_scan(pdf_bytes):
+    reader = load_reader()
+    # Converte apenas a primeira e a última página (onde estão os dados)
+    pages = convert_from_bytes(pdf_bytes, first_page=1, last_page=4)
+    
+    texto_completo = ""
+    for page in pages:
+        # Transforma a página do PDF em um formato que a IA entende
+        img_np = np.array(page)
+        resultados = reader.readtext(img_np, detail=0)
+        texto_completo += " ".join(resultados) + " "
 
-st.info("Visualize o PDF abaixo, digite os dados e baixe o arquivo renomeado.")
+    # Busca Placa (Ex: FDZ0H80)
+    texto_limpo = texto_completo.replace(" ", "").upper()
+    placa_match = re.search(r'[A-Z]{3}[0-9][A-Z0-9][0-9]{2}', texto_limpo)
+    placa = placa_match.group(0) if placa_match else "PLACA_NAO_ENCONTRADA"
 
-arquivo = st.file_uploader("Suba o arquivo PDF aqui", type=["pdf"])
+    # Busca Data (DD/MM/AAAA)
+    data_match = re.search(r'(\d{2})/(\d{2})/\d{4}', texto_completo)
+    data_curta = f"{data_match.group(1)}.{data_match.group(2)}" if data_match else "DATA_ERRO"
+    
+    return placa, data_curta
+
+st.title("🚛 Leitor Automático Della Volpe")
+st.info("Sistema gratuito e ilimitado. O processamento pode levar 30 segundos.")
+
+arquivo = st.file_uploader("Suba o arquivo PDF", type=["pdf"])
 
 if arquivo:
-    # Lemos os bytes uma única vez para usar na visualização e no download
     pdf_content = arquivo.read()
     
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader("Visualização")
-        display_pdf(pdf_content)
-        
-    with col2:
-        st.subheader("Dados do Arquivo")
-        # Você olha para o PDF e preenche aqui rapidamente
-        placa = st.text_input("Placa (ex: FDZ0H80)", "").upper().strip()
-        data_input = st.text_input("Data (ex: 04.04)", "").strip()
-        
-        if placa and data_input:
-            nome_final = f"{placa} - {data_input}.pdf"
-            st.success(f"Nome gerado: **{nome_final}**")
+    with st.spinner('A IA está analisando a imagem...'):
+        try:
+            placa, data = processar_scan(pdf_content)
+            nome_final = f"{placa} - {data}.pdf"
+            
+            st.success("✅ Leitura concluída!")
+            st.subheader(f"Nome sugerido: `{nome_final}`")
             
             st.download_button(
-                label="📥 Baixar PDF Renomeado",
+                label="📥 Baixar Arquivo Renomeado",
                 data=pdf_content,
                 file_name=nome_final,
                 mime="application/pdf"
             )
-        else:
-            st.warning("Preencha a Placa e a Data para baixar.")
+        except Exception as e:
+            st.error(f"Erro ao processar: {e}")
+            st.warning("Se o erro persistir, o arquivo pode ser grande demais para o servidor gratuito.")
