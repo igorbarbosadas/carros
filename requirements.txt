@@ -1,3 +1,4 @@
 streamlit
 easyocr
 pdf2image
+opencv-python-headless
