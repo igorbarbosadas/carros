@@ -1,62 +1,46 @@
 import streamlit as st
-import fitz  # PyMuPDF
+from google.cloud import vision
+import io
 import re
+import json
 
-def extrair_dados_simples(pdf_bytes):
-    # Abre o PDF diretamente da memória
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    texto_total = ""
-    
-    # Extrai o texto de todas as páginas
-    for pagina in doc:
-        texto_total += pagina.get_text()
-    
-    # Se o PDF for um scan total e o get_text vier vazio, 
-    # precisamos avisar o usuário, mas vamos tentar limpar o texto primeiro
-    texto_limpo = texto_total.replace(" ", "").upper()
-    
-    # 1. Busca Placa (Ex: FDZ0H80)
-    padrao_placa = re.search(r'[A-Z]{3}[0-9][A-Z0-9][0-9]{2}', texto_limpo)
-    placa = padrao_placa.group(0) if padrao_placa else "PLACA_NAO_ENCONTRADA"
-    
-    # 2. Busca Data (DD/MM/AAAA) - Tenta pegar a do "Impresso por"
-    # Se não achar, pega a primeira data que aparecer
-    match_data = re.search(r'(\d{2})/(\d{2})/\d{4}', texto_total)
-    
-    if match_data:
-        data_curta = f"{match_data.group(1)}.{match_data.group(2)}"
-    else:
-        data_curta = "DATA_NAO_ENCONTRADA"
-        
-    return placa, data_curta, texto_total
+# Carrega as credenciais dos Secrets do Streamlit
+if "gcp_service_account" in st.secrets:
+    info = json.loads(st.secrets["gcp_service_account"])
+    client = vision.ImageAnnotatorClient.from_service_account_info(info)
+else:
+    st.error("Configure as credenciais do Google Cloud nos Secrets.")
 
-# --- Interface ---
-st.set_page_config(page_title="Renomeador Della Volpe", layout="wide")
-st.title("🚛 Renomeador de Arquivos")
+def extrair_com_google(pdf_bytes):
+    # O Google Vision prefere imagens, mas para PDFs ele processa via GCS ou blocos
+    # Para simplicidade e arquivos > 1MB, enviamos o conteúdo
+    image = vision.Image(content=pdf_bytes)
+    response = client.text_detection(image=image)
+    texts = response.text_annotations
+    
+    if texts:
+        return texts[0].description
+    return ""
 
-arquivo = st.file_uploader("Suba o arquivo PDF", type=["pdf"])
+st.title("🚛 Renomeador Profissional (Google Vision)")
+
+arquivo = st.file_uploader("Suba o scan (PDF/Imagem)", type=["pdf", "jpg", "png"])
 
 if arquivo:
-    pdf_bytes = arquivo.read()
-    placa, data, texto_bruto = extrair_dados_simples(pdf_bytes)
-    
-    nome_final = f"{placa} - {data}.pdf"
-    
-    st.divider()
-    
-    if placa == "PLACA_NAO_ENCONTRADA" and not texto_bruto.strip():
-        st.error("⚠️ Este PDF parece ser uma imagem pura (sem camada de texto).")
-        st.info("Para este tipo de arquivo, o Streamlit Cloud precisa de OCR pesado. Tente baixar o arquivo novamente do sistema original em formato PDF Digital, se possível.")
-    else:
-        st.success(f"✅ Nome sugerido: {nome_final}")
+    with st.spinner('O Google está lendo o arquivo...'):
+        conteudo = arquivo.read()
+        texto_extraido = extrair_com_google(conteudo)
         
-        st.download_button(
-            label="📥 Baixar PDF Renomeado",
-            data=pdf_bytes,
-            file_name=nome_final,
-            mime="application/pdf"
-        )
-    
-    # Ajuda a debugar: mostra o que o robô está lendo
-    with st.expander("Ver texto extraído pelo robô"):
-        st.text(texto_bruto)
+        # Limpeza e busca da Placa (Baseado no seu documento FDZ0H80)
+        texto_limpo = texto_extraido.replace(" ", "").upper()
+        placa_match = re.search(r'[A-Z]{3}[0-9][A-Z0-9][0-9]{2}', texto_limpo)
+        placa = placa_match.group(0) if placa_match else "PLACA_NAO_ENCONTRADA"
+        
+        # Busca Data no formato DD/MM/AAAA
+        data_match = re.search(r'(\d{2})/(\d{2})/\d{4}', texto_extraido)
+        data_curta = f"{data_match.group(1)}.{data_match.group(2)}" if data_match else "DATA_ERRO"
+        
+        nome_final = f"{placa} - {data_curta}.pdf"
+        
+        st.success(f"Pronto! Nome sugerido: {nome_final}")
+        st.download_button("Baixar Arquivo Renomeado", conteudo, file_name=nome_final)
