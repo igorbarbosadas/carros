@@ -1,51 +1,56 @@
 import streamlit as st
-import pdfplumber
+import easyocr
+import numpy as np
+from pdf2image import convert_from_bytes
 import re
 
-def extrair_dados_ajustados(pdf_file):
-    texto_completo = ""
-    with pdfplumber.open(pdf_file) as pdf:
-        for pagina in pdf.pages:
-            texto_completo += pagina.extract_text() + "\n"
-    
-    # 1. Busca Placa (Ex: FDZ0H80) [cite: 18, 157]
-    padrao_placa = re.search(r'[A-Z]{3}[0-9][A-Z0-9][0-9]{2}', texto_completo)
-    placa = padrao_placa.group(0) if padrao_placa else "PLACA_NAO_ENCONTRADA"
+# Carrega o leitor de OCR (Português)
+reader = easyocr.Reader(['pt'])
 
-    # 2. Busca Data especificamente após "Impresso por" 
-    # No seu doc: "Impresso por:C017542-04/04/2026-20:38:41"
-    match_impresso = re.search(r'Impresso por:.*?(\d{2})/(\d{2})/\d{4}', texto_completo)
+def processar_arquivo(pdf_bytes):
+    # Converte a primeira página do PDF para imagem
+    images = convert_from_bytes(pdf_bytes, first_page=1, last_page=1)
+    img_array = np.array(images[0])
     
-    if match_impresso:
-        dia = match_impresso.group(1) # Pega o DD
-        mes = match_impresso.group(2) # Pega o MM
-        data_curta = f"{dia}.{mes}"
+    # Lê o texto da imagem
+    resultados = reader.readtext(img_array, detail=0)
+    texto_total = " ".join(resultados)
+    
+    # 1. Busca Placa (Ex: FDZ0H80)
+    # Remove espaços para garantir que o OCR não dividiu a placa
+    texto_limpo = texto_total.replace(" ", "").upper()
+    placa_match = re.search(r'[A-Z]{3}[0-9][A-Z0-9][0-9]{2}', texto_limpo)
+    placa = placa_match.group(0) if placa_match else "PLACA_NAO_ENCONTRADA"
+    
+    # 2. Busca a data no campo "Impresso por"
+    # Procuramos o padrão DD/MM/AAAA perto da palavra 'Impresso'
+    data_match = re.search(r'(\d{2})/(\d{2})/\d{4}', texto_total)
+    
+    if data_match:
+        data_curta = f"{data_match.group(1)}.{data_match.group(2)}"
     else:
-        data_curta = "DATA_NAO_ENCONTRADA"
-    
+        data_curta = "DATA_ERRO"
+        
     return placa, data_curta
 
-# --- Interface Streamlit ---
-st.set_page_config(page_title="Renomeador de Cargas", page_icon="🚛")
-st.title("🚛 Renomeador Automático")
-st.write("Formato de saída: **PLACA - DD.MM.pdf**")
+# --- Interface ---
+st.title("🚛 Renomeador de Scans Della Volpe")
 
-upload = st.file_uploader("Arraste o PDF aqui", type=["pdf"])
+arquivo = st.file_uploader("Suba o scan em PDF aqui", type=["pdf"])
 
-if upload:
-    placa, data_personalizada = extrair_dados_ajustados(upload)
-    
-    # Monta o nome conforme solicitado: PLACA - DD.MM.pdf
-    nome_final = f"{placa} - {data_personalizada}.pdf"
-    
-    st.divider()
-    st.subheader("Resultado da Extração:")
-    st.info(f"**Nome sugerido:** `{nome_final}`")
-    
-    # Botão para baixar com o novo nome
-    st.download_button(
-        label="📥 Baixar PDF Renomeado",
-        data=upload,
-        file_name=nome_final,
-        mime="application/pdf"
-    )
+if arquivo:
+    with st.spinner('Lendo imagem... (Isso leva uns 10 segundos na primeira vez)'):
+        pdf_content = arquivo.read()
+        placa, data = processar_arquivo(pdf_content)
+        
+        nome_final = f"{placa} - {data}.pdf"
+        
+        st.success("Leitura Finalizada!")
+        st.subheader(f"Sugestão de nome: `{nome_final}`")
+        
+        st.download_button(
+            label="📥 Baixar Arquivo com Novo Nome",
+            data=pdf_content,
+            file_name=nome_final,
+            mime="application/pdf"
+        )
